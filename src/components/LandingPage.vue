@@ -30,9 +30,9 @@
           cups — built by the people who drink them.
         </p>
         <div class="hero-actions">
-          <a href="#" class="btn-primary">
+          <RouterLink to="/auth" class="btn-primary">
             <IconPin /> Start pinning
-          </a>
+          </RouterLink>
           <a href="#how" class="btn-ghost">
             See how it works
             <IconArrow />
@@ -82,7 +82,7 @@
 
           <div class="map-popup">
             <div class="popup-img">
-              <IconCupLarge />
+              <!--  -->
             </div>
             <div class="popup-body">
               <div class="popup-name">The Daily Grind</div>
@@ -130,7 +130,7 @@
         <div class="card-stack">
           <div v-for="card in photoCards" :key="card.name" class="photo-card">
             <div class="photo-card-img" :style="{ background: card.bg }">
-              <IconCupLarge :stroke="'rgba(240,230,211,0.25)'" />
+              <!--  -->
             </div>
             <div class="photo-card-foot">
               <div class="photo-card-name">{{ card.name }}</div>
@@ -148,9 +148,9 @@
         <h2 class="section-title">The map is <em>always</em> growing.</h2>
         <p>Every pin someone drops makes the map a little richer. Log in, drop your first pin, and become part of the
           atlas.</p>
-        <a href="#" class="btn-primary btn-dark">
+        <RouterLink to="/map" class="btn-primary btn-dark">
           <IconPin /> Open the map
-        </a>
+        </RouterLink>
       </div>
       <div ref="ctaMap" class="map-preview reveal">
         <div class="map-preview-grid"></div>
@@ -232,18 +232,6 @@ const IconArrow = {
 const IconCup = {
   template: `
     <svg class="pin-icon" viewBox="0 0 24 24" fill="none" stroke="#f0e6d3" stroke-width="1.5" stroke-linecap="round">
-      <path d="M6 10 L7.5 18 Q7.7 19 9 19 L15 19 Q16.3 19 16.5 18 L18 10 Z"/>
-      <path d="M18 12 Q21 12 21 14.5 Q21 17 18 17"/>
-      <ellipse cx="12" cy="20" rx="4" ry="1"/>
-      <path d="M9 9 Q8.5 7 9 5.5"/><path d="M12 8.5 Q11.5 6.5 12 5"/><path d="M15 9 Q14.5 7 15 5.5"/>
-    </svg>
-  `
-}
-
-const IconCupLarge = {
-  props: { stroke: { type: String, default: '#f0e6d3' } },
-  template: `
-    <svg width="56" height="56" viewBox="0 0 24 24" fill="none" :stroke="stroke" stroke-width="1" stroke-linecap="round">
       <path d="M6 10 L7.5 18 Q7.7 19 9 19 L15 19 Q16.3 19 16.5 18 L18 10 Z"/>
       <path d="M18 12 Q21 12 21 14.5 Q21 17 18 17"/>
       <ellipse cx="12" cy="20" rx="4" ry="1"/>
