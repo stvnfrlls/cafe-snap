@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img">
+  <title>Cafe Snap</title>
+
+  <rect width="64" height="64" rx="14" fill="#2c1a0e"/>
+
+  <path fill="none" stroke="#c8a97a" stroke-width="2" stroke-linecap="round" d="M22 22 Q21 18 22 14"/>
+  <path fill="none" stroke="#c8a97a" stroke-width="2" stroke-linecap="round" d="M32 21 Q31 17 32 13"/>
+  <path fill="none" stroke="#c8a97a" stroke-width="2" stroke-linecap="round" d="M42 22 Q41 18 42 14"/>
+
+  <path fill="none" stroke="#f0e6d3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
+        d="M18 26 L20 46 Q20.5 49 24 49 L40 49 Q43.5 49 44 46 L46 26 Z"/>
+
+  <path fill="none" stroke="#f0e6d3" stroke-width="3" stroke-linecap="round"
+        d="M46 32 Q52 32 52 38 Q52 44 46 44"/>
+
+  <ellipse cx="32" cy="51.5" rx="10" ry="2" fill="none" stroke="#f0e6d3" stroke-width="2.5"/>
+
+  <circle cx="32" cy="37" r="4" fill="#c8a97a"/>
+  <path fill="#c8a97a" d="M32 41 L28.5 47.5 Q30.5 46 32 47.5 Q33.5 46 35.5 47.5 Z"/>
+</svg>
