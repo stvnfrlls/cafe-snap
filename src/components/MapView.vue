@@ -115,21 +115,17 @@ const isLoggedIn = computed(() => !!auth.user)
 // ─── Pins store ───────────────────────────────────────────────────────────
 const pinsStore = usePinsStore()
 
-// ─── Refs ──────────────────────────────────────────────────────────────
+// ─── Refs ─────────────────────────────────────────────────────────────────
 const mapContainer = ref(null)
 const isAddingPin = ref(false)
 const showModal = ref(false)
 const selectedCoords = ref(null)
-let userLocationMarker = null
 
 let map = null
+let userLocationMarker = null
 
 // ─── Map style ────────────────────────────────────────────────────────────
-// OpenFreeMap "Positron" — clean, flat, cream-toned. No API key required.
-// Docs: https://openfreemap.org
 const MAP_STYLE = 'https://tiles.openfreemap.org/styles/positron'
-
-// Default center: Manila, PH
 const DEFAULT_CENTER = [120.9842, 14.5995]
 const DEFAULT_ZOOM = 13
 
@@ -140,26 +136,25 @@ onMounted(() => {
         style: MAP_STYLE,
         center: DEFAULT_CENTER,
         zoom: DEFAULT_ZOOM,
-        attributionControl: false,      // we add a custom one below
+        attributionControl: false,
     })
 
-    // Custom compact attribution
     map.addControl(
         new maplibregl.AttributionControl({ compact: true }),
         'bottom-left'
     )
 
     map.scrollZoom.enable()
-
     map.on('load', onMapLoad)
     map.on('click', onMapClick)
-    map.on('zoom', updateMarkerScale)
 })
 
 onBeforeUnmount(() => {
     if (searchMarker) searchMarker.remove()
+    if (userLocationMarker) userLocationMarker.remove()
     for (const marker of pinMarkers.values()) marker.remove()
     pinMarkers.clear()
+    cleanupOsmLayer()
     map?.remove()
     map = null
 })
@@ -169,7 +164,7 @@ async function onMapLoad() {
     applyBrandStyle()
     await pinsStore.fetchPins()
     renderPins(pinsStore.pins)
-    updateMarkerScale()
+    initOsmLayer()
 }
 
 // ─── Fly-to + search marker ───────────────────────────────────────────────
@@ -183,12 +178,7 @@ function onFlyTo({ lat, lon, displayName }) {
         searchMarker = null
     }
 
-    map.flyTo({
-        center: [lon, lat],
-        zoom: 14,
-        duration: 1600,
-        essential: true,
-    })
+    map.flyTo({ center: [lon, lat], zoom: 14, duration: 1600, essential: true })
 
     const el = document.createElement('div')
     el.className = 'search-marker'
@@ -198,10 +188,7 @@ function onFlyTo({ lat, lon, displayName }) {
         ${displayName ? `<div class="search-marker__label">${displayName}</div>` : ''}
     `
 
-    searchMarker = new maplibregl.Marker({
-        element: el,
-        anchor: 'bottom',
-    })
+    searchMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
         .setLngLat([lon, lat])
         .addTo(map)
 
@@ -218,21 +205,12 @@ function applyBrandStyle() {
     if (!map) return
 
     const overrides = [
-        // Land / background
         { layer: 'background', prop: 'background-color', value: '#f5f0e8' },
-
-        // Water
         { layer: 'water', prop: 'fill-color', value: '#ddd5c4' },
-
-        // Parks / green areas — desaturate to warm grey
         { layer: 'landcover_grass', prop: 'fill-color', value: '#e8e0d0' },
         { layer: 'landcover_wood', prop: 'fill-color', value: '#e0d8c8' },
-
-        // Buildings — very subtle
         { layer: 'building', prop: 'fill-color', value: '#e2d9c8' },
         { layer: 'building', prop: 'fill-outline-color', value: '#d5ccba' },
-
-        // Roads — warm neutrals, not harsh grey
         { layer: 'road_motorway', prop: 'line-color', value: '#c8b99a' },
         { layer: 'road_trunk', prop: 'line-color', value: '#c8b99a' },
         { layer: 'road_primary', prop: 'line-color', value: '#d4c8b0' },
@@ -249,7 +227,7 @@ function applyBrandStyle() {
 }
 
 // ─── Community pin markers ────────────────────────────────────────────────
-const pinMarkers = new Map() // pin.id → maplibregl.Marker
+const pinMarkers = new Map()
 
 function buildPinElement(pin) {
     const el = document.createElement('div')
@@ -288,14 +266,12 @@ function buildPopupHTML(pin) {
 }
 
 function renderPins(pins) {
-    // Remove markers no longer in the store
     for (const [id, marker] of pinMarkers) {
         if (!pins.find(p => p.id === id)) {
             marker.remove()
             pinMarkers.delete(id)
         }
     }
-    // Add new markers
     for (const pin of pins) {
         if (pinMarkers.has(pin.id)) continue
 
@@ -313,104 +289,269 @@ function renderPins(pins) {
             .addTo(map)
 
         pinMarkers.set(pin.id, marker)
-
-        applyScaleToMarker(marker)
     }
 }
 
 function onPinCreated(pin) {
-    // Optional: fly to new pin
-    map?.flyTo({
-        center: [pin.lng, pin.lat],
-        zoom: 15,
-        duration: 1000
-    })
+    map?.flyTo({ center: [pin.lng, pin.lat], zoom: 15, duration: 1000 })
 }
 
-function updateMarkerScale() {
-    for (const marker of pinMarkers.values()) {
-        applyScaleToMarker(marker)
+watch(
+    () => pinsStore.pins,
+    (pins) => { if (map && pins?.length) renderPins(pins) },
+    { deep: true, immediate: true }
+)
+
+// ─── OSM Café Layer ───────────────────────────────────────────────────────
+const OSM_MIN_ZOOM = 13
+const OSM_DEBOUNCE_MS = 1200  // increased from 800ms
+const OSM_TILE_SIZE = 0.05  // ~5km grid cells in degrees
+
+const osmMarkers = new Map()  // osm node id → maplibregl.Marker
+const osmCache = new Map()  // tile key → array of OSM nodes
+const osmFetching = new Set()  // tile keys currently being fetched
+
+let osmDebounceTimer = null
+let osmFetchController = null
+
+function initOsmLayer() {
+    map.on('moveend', onMapMoveEnd)
+    map.on('zoomend', onMapZoomEnd)
+    if (map.getZoom() >= OSM_MIN_ZOOM) scheduleOsmFetch()
+}
+
+function onMapMoveEnd() {
+    if (map.getZoom() < OSM_MIN_ZOOM) return
+    scheduleOsmFetch()
+}
+
+function onMapZoomEnd() {
+    if (map.getZoom() < OSM_MIN_ZOOM) {
+        hideAllOsmMarkers()
+    } else {
+        showAllOsmMarkers()
+        scheduleOsmFetch()
     }
 }
 
-function applyScaleToMarker(marker) {
+function scheduleOsmFetch() {
+    clearTimeout(osmDebounceTimer)
+    osmDebounceTimer = setTimeout(fetchOsmCafes, OSM_DEBOUNCE_MS)
+}
+
+// Snap a coordinate to the nearest tile grid corner
+function tileKey(lat, lon) {
+    const row = Math.floor(lat / OSM_TILE_SIZE)
+    const col = Math.floor(lon / OSM_TILE_SIZE)
+    return `${row}:${col}`
+}
+
+// Get all tile keys that the current viewport covers
+function getViewportTileKeys() {
+    const b = map.getBounds()
+    const s = b.getSouth()
+    const w = b.getWest()
+    const n = b.getNorth()
+    const e = b.getEast()
+
+    const keys = new Set()
+    for (let lat = Math.floor(s / OSM_TILE_SIZE) * OSM_TILE_SIZE; lat < n; lat += OSM_TILE_SIZE) {
+        for (let lon = Math.floor(w / OSM_TILE_SIZE) * OSM_TILE_SIZE; lon < e; lon += OSM_TILE_SIZE) {
+            keys.add(tileKey(lat, lon))
+        }
+    }
+    return keys
+}
+
+async function fetchOsmCafes() {
     if (!map) return
 
-    const zoom = map.getZoom()
-    const scale = Math.max(0.4, Math.min(1, (zoom - 10) / 5))
+    const viewportKeys = getViewportTileKeys()
 
-    const el = marker.getElement()
-    const diamond = el.querySelector('.cafe-pin__diamond')
-    if (diamond) {
-        diamond.style.transform = `rotate(45deg) scale(${scale})`
-    }
+    // Which tiles do we actually need to fetch?
+    const missingKeys = [...viewportKeys].filter(
+        k => !osmCache.has(k) && !osmFetching.has(k)
+    )
 
-    const label = el.querySelector('.cafe-pin__label')
-    if (label) {
-        label.style.display = zoom > 13 ? 'block' : 'none'
+    // Render whatever we already have cached for the viewport immediately
+    const cachedNodes = [...viewportKeys]
+        .filter(k => osmCache.has(k))
+        .flatMap(k => osmCache.get(k))
+    renderOsmCafes(cachedNodes)
+
+    if (missingKeys.length === 0) return
+
+    // Mark all missing tiles as in-flight
+    missingKeys.forEach(k => osmFetching.add(k))
+
+    // Build a single bounding box covering all missing tiles
+    const rows = missingKeys.map(k => parseInt(k.split(':')[0]))
+    const cols = missingKeys.map(k => parseInt(k.split(':')[1]))
+    const s = (Math.min(...rows) * OSM_TILE_SIZE).toFixed(6)
+    const w = (Math.min(...cols) * OSM_TILE_SIZE).toFixed(6)
+    const n = ((Math.max(...rows) + 1) * OSM_TILE_SIZE).toFixed(6)
+    const e = ((Math.max(...cols) + 1) * OSM_TILE_SIZE).toFixed(6)
+
+    if (osmFetchController) osmFetchController.abort()
+    osmFetchController = new AbortController()
+
+    const query = `[out:json][timeout:15];node["amenity"="cafe"](${s},${w},${n},${e});out body;`
+
+    try {
+        const res = await fetch('https://overpass-api.de/api/interpreter', {
+            method: 'POST',
+            body: query,
+            signal: osmFetchController.signal,
+        })
+
+        if (res.status === 429) {
+            // Back off and retry once after 5 seconds
+            console.warn('Overpass rate limited — retrying in 5s')
+            missingKeys.forEach(k => osmFetching.delete(k))
+            osmDebounceTimer = setTimeout(fetchOsmCafes, 5000)
+            return
+        }
+
+        if (!res.ok) throw new Error(`Overpass ${res.status}`)
+
+        const data = await res.json()
+        const nodes = data.elements ?? []
+
+        // Bucket each node into its tile and store in cache
+        // Tiles that returned zero nodes also get cached (empty array)
+        const buckets = new Map()
+        missingKeys.forEach(k => buckets.set(k, []))
+
+        for (const node of nodes) {
+            const k = tileKey(node.lat, node.lon)
+            if (buckets.has(k)) buckets.get(k).push(node)
+        }
+
+        buckets.forEach((tileNodes, k) => {
+            osmCache.set(k, tileNodes)
+            osmFetching.delete(k)
+        })
+
+        // Render all cached nodes for the current viewport
+        const allCached = [...getViewportTileKeys()]
+            .filter(k => osmCache.has(k))
+            .flatMap(k => osmCache.get(k))
+        renderOsmCafes(allCached)
+
+    } catch (err) {
+        if (err.name === 'AbortError') return
+        missingKeys.forEach(k => osmFetching.delete(k))
+        console.warn('OSM fetch failed:', err.message)
     }
 }
 
+function renderOsmCafes(nodes) {
+    const incomingIds = new Set(nodes.map(n => String(n.id)))
+
+    // Remove markers that left the viewport
+    for (const [id, marker] of osmMarkers) {
+        if (!incomingIds.has(id)) {
+            marker.remove()
+            osmMarkers.delete(id)
+        }
+    }
+
+    // Add new markers
+    for (const node of nodes) {
+        const id = String(node.id)
+        if (osmMarkers.has(id)) continue
+
+        const el = buildOsmElement(node)
+        const popup = new maplibregl.Popup({
+            offset: 10,
+            closeButton: false,
+            maxWidth: '200px',
+            className: 'osm-popup-wrapper',
+        }).setHTML(buildOsmPopupHTML(node))
+
+        const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+            .setLngLat([node.lon, node.lat])
+            .setPopup(popup)
+            .addTo(map)
+
+        osmMarkers.set(id, marker)
+    }
+}
+
+function buildOsmElement(node) {
+    const el = document.createElement('div')
+    el.className = 'osm-pin'
+    el.title = node.tags?.name ?? 'Café'
+    el.innerHTML = `
+        <svg class="osm-pin__svg" width="20" height="26" viewBox="0 0 20 26" xmlns="http://www.w3.org/2000/svg">
+            <path d="M10 0C4.477 0 0 4.477 0 10c0 7.5 10 16 10 16S20 17.5 20 10C20 4.477 15.523 0 10 0z"
+                fill="#3d2512" fill-opacity="0.7" stroke="#c8a97a" stroke-width="1.2"/>
+            <circle cx="10" cy="10" r="3.5" fill="none" stroke="#c8a97a" stroke-width="1.2" opacity="0.8"/>
+        </svg>
+    `
+    return el
+}
+
+function buildOsmPopupHTML(node) {
+    const tags = node.tags ?? {}
+    const name = tags.name ?? 'Unknown café'
+    const street = tags['addr:street'] ?? ''
+    const housenr = tags['addr:housenumber'] ?? ''
+    const address = [housenr, street].filter(Boolean).join(' ')
+    const hours = tags['opening_hours'] ?? ''
+
+    return `
+        <div class="osm-popup">
+            <p class="osm-popup__name">${name}</p>
+            ${address ? `<p class="osm-popup__detail">${address}</p>` : ''}
+            ${hours ? `<p class="osm-popup__hours">${hours}</p>` : ''}
+        </div>
+    `
+}
+
+function hideAllOsmMarkers() {
+    for (const marker of osmMarkers.values()) {
+        marker.getElement().style.display = 'none'
+    }
+}
+
+function showAllOsmMarkers() {
+    for (const marker of osmMarkers.values()) {
+        marker.getElement().style.display = ''
+    }
+}
+
+function cleanupOsmLayer() {
+    clearTimeout(osmDebounceTimer)
+    if (osmFetchController) osmFetchController.abort()
+    for (const marker of osmMarkers.values()) marker.remove()
+    osmMarkers.clear()
+}
+
+// ─── User location ────────────────────────────────────────────────────────
 function showUserLocation() {
     if (!navigator.geolocation || !map) return
-
     navigator.geolocation.getCurrentPosition(
         ({ coords }) => {
-            const lng = coords.longitude
-            const lat = coords.latitude
-
-            // fly to user
-            map.flyTo({
-                center: [lng, lat],
-                zoom: 15,
-                duration: 1200
-            })
-
-            // remove old marker
-            if (userLocationMarker) {
-                userLocationMarker.remove()
-            }
-
-            // create element
+            map.flyTo({ center: [coords.longitude, coords.latitude], zoom: 15, duration: 1200 })
+            if (userLocationMarker) userLocationMarker.remove()
             const el = document.createElement('div')
             el.className = 'user-location-marker'
-
-            // add marker
-            userLocationMarker = new maplibregl.Marker({
-                element: el,
-                anchor: 'center'
-            })
-                .setLngLat([lng, lat])
+            userLocationMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
+                .setLngLat([coords.longitude, coords.latitude])
                 .addTo(map)
         },
         (err) => console.warn('Location error:', err),
-        {
-            enableHighAccuracy: true
-        }
+        { enableHighAccuracy: true }
     )
 }
-
-// Re-render whenever pins change (e.g. after AddPinModal inserts a new one in Step 4)
-watch(
-    () => pinsStore.pins,
-    (pins) => {
-        if (!map) return
-        if (!pins || pins.length === 0) return
-
-        renderPins(pins)
-    },
-    { deep: true, immediate: true }
-)
 
 // ─── Map interactions ─────────────────────────────────────────────────────
 function onMapClick(e) {
     if (!isAddingPin.value) return
-
     const { lng, lat } = e.lngLat
-
     selectedCoords.value = { lat, lng }
     showModal.value = true
-
     isAddingPin.value = false
     if (map) map.getCanvas().style.cursor = ''
 }
@@ -419,22 +560,6 @@ function onMapClick(e) {
 function zoomIn() { map?.zoomIn() }
 function zoomOut() { map?.zoomOut() }
 
-function locateUser() {
-    if (!navigator.geolocation) return
-    navigator.geolocation.getCurrentPosition(
-        ({ coords }) => {
-            map?.flyTo({
-                center: [coords.longitude, coords.latitude],
-                zoom: 15,
-                duration: 1200,
-                essential: true,
-            })
-        },
-        (err) => console.warn('Geolocation error:', err)
-    )
-}
-
-// ─── Pin mode ─────────────────────────────────────────────────────────────
 function onAddPinClick() {
     isAddingPin.value = true
     if (map) map.getCanvas().style.cursor = 'crosshair'
@@ -524,16 +649,11 @@ defineExpose({ map: () => map })
     font-weight: 500;
     font-family: inherit;
     cursor: pointer;
-    transition: background 0.2s, opacity 0.2s;
+    transition: background 0.2s;
 }
 
-.btn-add:hover:not(:disabled) {
+.btn-add:hover {
     background: var(--espresso-light);
-}
-
-.btn-add:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
 }
 
 .btn-user {
@@ -632,7 +752,6 @@ defineExpose({ map: () => map })
     padding: 12px 20px;
     border-radius: 8px;
     font-size: 13px;
-    font-weight: 400;
     white-space: nowrap;
     box-shadow: 0 4px 20px rgba(44, 26, 14, 0.3);
 }
@@ -688,14 +807,13 @@ defineExpose({ map: () => map })
 
 <!-- Unscoped: MapLibre injects markers outside Vue's component DOM tree -->
 <style>
+/* ── Community pin markers ── */
 .cafe-pin {
     display: flex;
     flex-direction: column;
     align-items: center;
     cursor: pointer;
     filter: drop-shadow(0 2px 6px rgba(44, 26, 14, 0.4));
-    transform: scale(var(--pin-scale, 1));
-    transition: transform 0.15s;
 }
 
 .cafe-pin:hover .cafe-pin__diamond {
@@ -708,10 +826,12 @@ defineExpose({ map: () => map })
     background: #2c1a0e;
     border: 2px solid #c8a97a;
     border-radius: 4px;
+    transform: rotate(45deg);
     display: flex;
     align-items: center;
     justify-content: center;
     box-shadow: 0 2px 8px rgba(44, 26, 14, 0.45);
+    transition: transform 0.15s;
 }
 
 .cafe-pin__diamond svg {
@@ -734,8 +854,87 @@ defineExpose({ map: () => map })
     overflow: hidden;
     text-overflow: ellipsis;
     line-height: 1.4;
+    pointer-events: none;
 }
 
+/* ── OSM café markers ── */
+.osm-pin {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    filter: drop-shadow(0 1px 3px rgba(44, 26, 14, 0.35));
+    transition: filter 0.15s;
+}
+
+.osm-pin__svg {
+    transition: transform 0.15s;
+    transform-origin: bottom center;
+}
+
+.osm-pin:hover .osm-pin__svg {
+    transform: scale(1.25);
+}
+
+.osm-pin__dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #3d2512;
+    border: 1.5px solid #c8a97a;
+    opacity: 0.65;
+    transition: opacity 0.15s, transform 0.15s;
+}
+
+.osm-pin:hover .osm-pin__dot {
+    opacity: 1;
+    transform: scale(1.3);
+}
+
+/* ── OSM popup ── */
+.osm-popup-wrapper .maplibregl-popup-content {
+    padding: 10px 13px 11px;
+    background: #faf6f0;
+    border: 1px solid #ddd0b8;
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(44, 26, 14, 0.15);
+    font-family: 'DM Sans', sans-serif;
+}
+
+.osm-popup-wrapper .maplibregl-popup-tip {
+    border-top-color: #ddd0b8;
+}
+
+.osm-popup__name {
+    font-family: 'Playfair Display', serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1a1008;
+    margin-bottom: 3px;
+}
+
+.osm-popup__detail {
+    font-size: 11px;
+    color: #7a6550;
+    margin-bottom: 2px;
+}
+
+.osm-popup__hours {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: #a8854f;
+    margin-bottom: 4px;
+}
+
+.osm-popup__source {
+    font-size: 10px;
+    color: #b8a898;
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid #ede5d8;
+}
+
+/* ── Search result marker ── */
 .search-marker {
     position: relative;
     display: flex;
@@ -795,6 +994,7 @@ defineExpose({ map: () => map })
     }
 }
 
+/* ── User pin popup ── */
 .snap-popup-wrapper .maplibregl-popup-content {
     padding: 0;
     background: #faf6f0;
@@ -853,6 +1053,7 @@ defineExpose({ map: () => map })
     color: #a8854f;
 }
 
+/* ── User location marker ── */
 .user-location-marker {
     width: 14px;
     height: 14px;
