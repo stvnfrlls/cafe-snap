@@ -315,10 +315,9 @@ function buildGalleryPopupHTML(cafeName, pins) {
         const dateStr = new Date(p.created_at).toLocaleDateString('en-PH', {
             month: 'long', day: 'numeric', year: 'numeric'
         })
-        const safeName = cafeName.replace(/'/g, "\\'")
         return `
             <div class="gallery-grid__item"
-                onclick="window.__cafeSnapLightbox('${p.image_url}','${safeName}','${dateStr}')">
+                onclick='window.__cafeSnapLightbox(${JSON.stringify(String(p.image_url))}, ${JSON.stringify(String(cafeName))}, ${JSON.stringify(String(dateStr))})'>
                 <img src="${p.image_url}" alt="${cafeName}" loading="lazy" />
                 <div class="gallery-grid__overlay">
                     <span>${dateStr}</span>
