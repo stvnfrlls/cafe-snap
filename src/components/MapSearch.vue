@@ -179,7 +179,7 @@ function selectResult(result) {
     inputEl.value?.blur()
 
     // Emit coordinates up to MapView
-    emit('fly-to', { lat: result.lat, lon: result.lon })
+    emit('fly-to', { lat: result.lat, lon: result.lon, displayName: result.name })
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
