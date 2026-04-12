@@ -24,9 +24,7 @@
             </a>
 
             <div class="map-nav-actions">
-                <button v-if="isLoggedIn" class="btn-add" @click="onAddPinClick">
-                    Add pin
-                </button>
+                <button v-if="isLoggedIn" class="btn-add" @click="onAddPinClick">Add pin</button>
                 <button v-if="isLoggedIn" class="btn-user" @click="logout" title="Logout">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round">
@@ -50,10 +48,8 @@
             <MapSearch @fly-to="onFlyTo" />
         </div>
 
-        <!-- Map container — MapLibre mounts here -->
         <div ref="mapContainer" class="map-container"></div>
 
-        <!-- Map controls -->
         <div class="map-controls">
             <button class="map-ctrl-btn" @click="zoomIn" title="Zoom in">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
@@ -70,7 +66,6 @@
             </button>
         </div>
 
-        <!-- Locate me button -->
         <button class="map-locate-btn" @click="showUserLocation" title="Go to my location">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round">
@@ -80,7 +75,6 @@
             </svg>
         </button>
 
-        <!-- "Adding pin" mode instruction banner -->
         <Transition name="banner">
             <div v-if="isAddingPin" class="pin-mode-banner">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -90,6 +84,25 @@
                 </svg>
                 Click anywhere on the map to place your pin
                 <button class="banner-cancel" @click="cancelAddPin">Cancel</button>
+            </div>
+        </Transition>
+
+        <!-- Lightbox -->
+        <Transition name="lightbox">
+            <div v-if="lightbox.open" class="lightbox" @click.self="closeLightbox">
+                <button class="lightbox__close" @click="closeLightbox">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                </button>
+                <div class="lightbox__img-wrap">
+                    <img :src="lightbox.src" :alt="lightbox.name" />
+                </div>
+                <div class="lightbox__meta">
+                    <p class="lightbox__name">{{ lightbox.name }}</p>
+                    <p class="lightbox__date">{{ lightbox.date }}</p>
+                </div>
             </div>
         </Transition>
 
@@ -121,6 +134,9 @@ const isAddingPin = ref(false)
 const showModal = ref(false)
 const selectedCoords = ref(null)
 
+// Lightbox state
+const lightbox = ref({ open: false, src: '', name: '', date: '' })
+
 let map = null
 let userLocationMarker = null
 
@@ -138,12 +154,7 @@ onMounted(() => {
         zoom: DEFAULT_ZOOM,
         attributionControl: false,
     })
-
-    map.addControl(
-        new maplibregl.AttributionControl({ compact: true }),
-        'bottom-left'
-    )
-
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left')
     map.scrollZoom.enable()
     map.on('load', onMapLoad)
     map.on('click', onMapClick)
@@ -172,11 +183,7 @@ let searchMarker = null
 
 function onFlyTo({ lat, lon, displayName }) {
     if (!map) return
-
-    if (searchMarker) {
-        searchMarker.remove()
-        searchMarker = null
-    }
+    if (searchMarker) { searchMarker.remove(); searchMarker = null }
 
     map.flyTo({ center: [lon, lat], zoom: 14, duration: 1600, essential: true })
 
@@ -189,15 +196,9 @@ function onFlyTo({ lat, lon, displayName }) {
     `
 
     searchMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
-        .setLngLat([lon, lat])
-        .addTo(map)
+        .setLngLat([lon, lat]).addTo(map)
 
-    setTimeout(() => {
-        if (searchMarker) {
-            searchMarker.remove()
-            searchMarker = null
-        }
-    }, 6000)
+    setTimeout(() => { if (searchMarker) { searchMarker.remove(); searchMarker = null } }, 6000)
 }
 
 // ─── Brand style overrides ────────────────────────────────────────────────
@@ -226,10 +227,49 @@ function applyBrandStyle() {
     })
 }
 
+// ─── Haversine distance (meters) ─────────────────────────────────────────
+function haversineMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371000
+    const phi1 = lat1 * Math.PI / 180
+    const phi2 = lat2 * Math.PI / 180
+    const dPhi = (lat2 - lat1) * Math.PI / 180
+    const dLam = (lon2 - lon1) * Math.PI / 180
+    const a = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLam / 2) ** 2
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+const MATCH_THRESHOLD = 10 // meters
+
+// Find all user pins within threshold of a coordinate
+function matchingUserPins(lat, lon) {
+    return pinsStore.pins.filter(p => haversineMeters(lat, lon, p.lat, p.lng) <= MATCH_THRESHOLD)
+}
+
+// Find OSM node id within threshold of a user pin coordinate (returns id string or null)
+function matchingOsmNode(lat, lon) {
+    for (const [id, marker] of osmMarkers) {
+        const ll = marker.getLngLat()
+        if (haversineMeters(lat, lon, ll.lat, ll.lng) <= MATCH_THRESHOLD) return id
+    }
+    return null
+}
+
+// ─── Lightbox ────────────────────────────────────────────────────────────
+function openLightbox(src, name, date) {
+    lightbox.value = { open: true, src, name, date }
+}
+
+function closeLightbox() {
+    lightbox.value = { ...lightbox.value, open: false }
+}
+
+// Expose to inline popup onclick handlers
+window.__cafeSnapLightbox = openLightbox
+
 // ─── Community pin markers ────────────────────────────────────────────────
 const pinMarkers = new Map()
 
-function buildPinElement(pin) {
+function buildPinElement(label) {
     const el = document.createElement('div')
     el.className = 'cafe-pin'
     el.innerHTML = `
@@ -242,18 +282,23 @@ function buildPinElement(pin) {
                 <path d="M14 6Q13.5 4.5 14 3" stroke="#c8a97a" stroke-width="1.4" stroke-linecap="round"/>
             </svg>
         </div>
-        <div class="cafe-pin__label">${pin.cafe_name}</div>
+        <div class="cafe-pin__label">${label}</div>
     `
     return el
 }
 
-function buildPopupHTML(pin) {
+function buildSinglePopupHTML(pin) {
     const date = new Date(pin.created_at).toLocaleDateString('en-PH', {
         month: 'short', day: 'numeric', year: 'numeric'
     })
+    const dateStr = new Date(pin.created_at).toLocaleDateString('en-PH', {
+        month: 'long', day: 'numeric', year: 'numeric'
+    })
     return `
         <div class="snap-popup">
-            <div class="snap-popup__img-wrap">
+            <div class="snap-popup__img-wrap"
+                onclick="window.__cafeSnapLightbox('${pin.image_url}','${pin.cafe_name.replace(/'/g, "\\'")}','${dateStr}')"
+                style="cursor:pointer">
                 <img src="${pin.image_url}" alt="${pin.cafe_name}" loading="lazy" />
             </div>
             <div class="snap-popup__body">
@@ -265,7 +310,34 @@ function buildPopupHTML(pin) {
     `
 }
 
+function buildGalleryPopupHTML(cafeName, pins) {
+    const photos = pins.map(p => {
+        const dateStr = new Date(p.created_at).toLocaleDateString('en-PH', {
+            month: 'long', day: 'numeric', year: 'numeric'
+        })
+        const safeName = cafeName.replace(/'/g, "\\'")
+        return `
+            <div class="gallery-grid__item"
+                onclick="window.__cafeSnapLightbox('${p.image_url}','${safeName}','${dateStr}')">
+                <img src="${p.image_url}" alt="${cafeName}" loading="lazy" />
+                <div class="gallery-grid__overlay">
+                    <span>${dateStr}</span>
+                </div>
+            </div>
+        `
+    }).join('')
+
+    return `
+        <div class="gallery-popup">
+            <p class="gallery-popup__name">${cafeName}</p>
+            <p class="gallery-popup__count">${pins.length} photo${pins.length > 1 ? 's' : ''}</p>
+            <div class="gallery-grid">${photos}</div>
+        </div>
+    `
+}
+
 function renderPins(pins) {
+    // Remove markers no longer in store
     for (const [id, marker] of pinMarkers) {
         if (!pins.find(p => p.id === id)) {
             marker.remove()
@@ -275,13 +347,19 @@ function renderPins(pins) {
     for (const pin of pins) {
         if (pinMarkers.has(pin.id)) continue
 
-        const el = buildPinElement(pin)
+        // Check if this pin is near an OSM café — if so, upgrade that OSM marker instead
+        const osmId = matchingOsmNode(pin.lat, pin.lng)
+        if (osmId) {
+            upgradeOsmMarker(osmId)
+            // Don't add a standalone pin marker — the OSM marker now represents it
+            continue
+        }
+
+        // Standalone user pin
+        const el = buildPinElement(pin.cafe_name)
         const popup = new maplibregl.Popup({
-            offset: 24,
-            closeButton: true,
-            maxWidth: '260px',
-            className: 'snap-popup-wrapper',
-        }).setHTML(buildPopupHTML(pin))
+            offset: 24, closeButton: true, maxWidth: '260px', className: 'snap-popup-wrapper',
+        }).setHTML(buildSinglePopupHTML(pin))
 
         const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
             .setLngLat([pin.lng, pin.lat])
@@ -303,13 +381,14 @@ watch(
 )
 
 // ─── OSM Café Layer ───────────────────────────────────────────────────────
-const OSM_MIN_ZOOM = 13
+const OSM_MIN_ZOOM = 10
 const OSM_DEBOUNCE_MS = 1200  // increased from 800ms
 const OSM_TILE_SIZE = 0.05  // ~5km grid cells in degrees
 
-const osmMarkers = new Map()  // osm node id → maplibregl.Marker
+const osmMarkers = new Map()  // osm node id (string) → maplibregl.Marker
+const osmNodes = new Map()  // osm node id (string) → raw OSM node data
 const osmCache = new Map()  // tile key → array of OSM nodes
-const osmFetching = new Set()  // tile keys currently being fetched
+const osmFetching = new Set()  // tile keys in flight
 
 let osmDebounceTimer = null
 let osmFetchController = null
@@ -339,24 +418,15 @@ function scheduleOsmFetch() {
     osmDebounceTimer = setTimeout(fetchOsmCafes, OSM_DEBOUNCE_MS)
 }
 
-// Snap a coordinate to the nearest tile grid corner
 function tileKey(lat, lon) {
-    const row = Math.floor(lat / OSM_TILE_SIZE)
-    const col = Math.floor(lon / OSM_TILE_SIZE)
-    return `${row}:${col}`
+    return `${Math.floor(lat / OSM_TILE_SIZE)}:${Math.floor(lon / OSM_TILE_SIZE)}`
 }
 
-// Get all tile keys that the current viewport covers
 function getViewportTileKeys() {
     const b = map.getBounds()
-    const s = b.getSouth()
-    const w = b.getWest()
-    const n = b.getNorth()
-    const e = b.getEast()
-
     const keys = new Set()
-    for (let lat = Math.floor(s / OSM_TILE_SIZE) * OSM_TILE_SIZE; lat < n; lat += OSM_TILE_SIZE) {
-        for (let lon = Math.floor(w / OSM_TILE_SIZE) * OSM_TILE_SIZE; lon < e; lon += OSM_TILE_SIZE) {
+    for (let lat = Math.floor(b.getSouth() / OSM_TILE_SIZE) * OSM_TILE_SIZE; lat < b.getNorth(); lat += OSM_TILE_SIZE) {
+        for (let lon = Math.floor(b.getWest() / OSM_TILE_SIZE) * OSM_TILE_SIZE; lon < b.getEast(); lon += OSM_TILE_SIZE) {
             keys.add(tileKey(lat, lon))
         }
     }
@@ -367,24 +437,16 @@ async function fetchOsmCafes() {
     if (!map) return
 
     const viewportKeys = getViewportTileKeys()
+    const missingKeys = [...viewportKeys].filter(k => !osmCache.has(k) && !osmFetching.has(k))
 
-    // Which tiles do we actually need to fetch?
-    const missingKeys = [...viewportKeys].filter(
-        k => !osmCache.has(k) && !osmFetching.has(k)
-    )
-
-    // Render whatever we already have cached for the viewport immediately
-    const cachedNodes = [...viewportKeys]
-        .filter(k => osmCache.has(k))
-        .flatMap(k => osmCache.get(k))
+    // Render cached tiles immediately
+    const cachedNodes = [...viewportKeys].filter(k => osmCache.has(k)).flatMap(k => osmCache.get(k))
     renderOsmCafes(cachedNodes)
 
     if (missingKeys.length === 0) return
 
-    // Mark all missing tiles as in-flight
     missingKeys.forEach(k => osmFetching.add(k))
 
-    // Build a single bounding box covering all missing tiles
     const rows = missingKeys.map(k => parseInt(k.split(':')[0]))
     const cols = missingKeys.map(k => parseInt(k.split(':')[1]))
     const s = (Math.min(...rows) * OSM_TILE_SIZE).toFixed(6)
@@ -399,13 +461,10 @@ async function fetchOsmCafes() {
 
     try {
         const res = await fetch('https://overpass-api.de/api/interpreter', {
-            method: 'POST',
-            body: query,
-            signal: osmFetchController.signal,
+            method: 'POST', body: query, signal: osmFetchController.signal,
         })
 
         if (res.status === 429) {
-            // Back off and retry once after 5 seconds
             console.warn('Overpass rate limited — retrying in 5s')
             missingKeys.forEach(k => osmFetching.delete(k))
             osmDebounceTimer = setTimeout(fetchOsmCafes, 5000)
@@ -416,9 +475,6 @@ async function fetchOsmCafes() {
 
         const data = await res.json()
         const nodes = data.elements ?? []
-
-        // Bucket each node into its tile and store in cache
-        // Tiles that returned zero nodes also get cached (empty array)
         const buckets = new Map()
         missingKeys.forEach(k => buckets.set(k, []))
 
@@ -432,7 +488,6 @@ async function fetchOsmCafes() {
             osmFetching.delete(k)
         })
 
-        // Render all cached nodes for the current viewport
         const allCached = [...getViewportTileKeys()]
             .filter(k => osmCache.has(k))
             .flatMap(k => osmCache.get(k))
@@ -453,32 +508,29 @@ function renderOsmCafes(nodes) {
         if (!incomingIds.has(id)) {
             marker.remove()
             osmMarkers.delete(id)
+            osmNodes.delete(id)
         }
     }
 
-    // Add new markers
     for (const node of nodes) {
         const id = String(node.id)
+        osmNodes.set(id, node)
+
         if (osmMarkers.has(id)) continue
 
-        const el = buildOsmElement(node)
-        const popup = new maplibregl.Popup({
-            offset: 10,
-            closeButton: false,
-            maxWidth: '200px',
-            className: 'osm-popup-wrapper',
-        }).setHTML(buildOsmPopupHTML(node))
+        const matched = matchingUserPins(node.lat, node.lon)
 
-        const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
-            .setLngLat([node.lon, node.lat])
-            .setPopup(popup)
-            .addTo(map)
-
-        osmMarkers.set(id, marker)
+        if (matched.length > 0) {
+            // Has user photos — render as diamond with gallery
+            addOsmAsDiamond(id, node, matched)
+        } else {
+            // No user photos — render as teardrop
+            addOsmAsTeardrop(id, node)
+        }
     }
 }
 
-function buildOsmElement(node) {
+function addOsmAsTeardrop(id, node) {
     const el = document.createElement('div')
     el.className = 'osm-pin'
     el.title = node.tags?.name ?? 'Café'
@@ -489,7 +541,54 @@ function buildOsmElement(node) {
             <circle cx="10" cy="10" r="3.5" fill="none" stroke="#c8a97a" stroke-width="1.2" opacity="0.8"/>
         </svg>
     `
-    return el
+
+    const popup = new maplibregl.Popup({
+        offset: 10, closeButton: false, maxWidth: '200px', className: 'osm-popup-wrapper',
+    }).setHTML(buildOsmPopupHTML(node))
+
+    const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+        .setLngLat([node.lon, node.lat])
+        .setPopup(popup)
+        .addTo(map)
+
+    osmMarkers.set(id, marker)
+}
+
+function addOsmAsDiamond(id, node, matchedPins) {
+    const name = node.tags?.name ?? matchedPins[0]?.cafe_name ?? 'Café'
+    const el = buildPinElement(name)
+
+    const popupHTML = matchedPins.length === 1
+        ? buildSinglePopupHTML(matchedPins[0])
+        : buildGalleryPopupHTML(name, matchedPins)
+
+    const popupClass = matchedPins.length === 1 ? 'snap-popup-wrapper' : 'gallery-popup-wrapper'
+
+    const popup = new maplibregl.Popup({
+        offset: 24, closeButton: true,
+        maxWidth: matchedPins.length === 1 ? '260px' : '280px',
+        className: popupClass,
+    }).setHTML(popupHTML)
+
+    const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+        .setLngLat([node.lon, node.lat])
+        .setPopup(popup)
+        .addTo(map)
+
+    osmMarkers.set(id, marker)
+}
+
+// Upgrade an existing teardrop to a diamond when a user pin is matched
+function upgradeOsmMarker(osmId) {
+    const node = osmNodes.get(osmId)
+    if (!node) return
+
+    // Remove old teardrop
+    const old = osmMarkers.get(osmId)
+    if (old) { old.remove(); osmMarkers.delete(osmId) }
+
+    const matched = matchingUserPins(node.lat, node.lon)
+    if (matched.length > 0) addOsmAsDiamond(osmId, node, matched)
 }
 
 function buildOsmPopupHTML(node) {
@@ -505,20 +604,17 @@ function buildOsmPopupHTML(node) {
             <p class="osm-popup__name">${name}</p>
             ${address ? `<p class="osm-popup__detail">${address}</p>` : ''}
             ${hours ? `<p class="osm-popup__hours">${hours}</p>` : ''}
+            <p class="osm-popup__source">via OpenStreetMap</p>
         </div>
     `
 }
 
 function hideAllOsmMarkers() {
-    for (const marker of osmMarkers.values()) {
-        marker.getElement().style.display = 'none'
-    }
+    for (const marker of osmMarkers.values()) marker.getElement().style.display = 'none'
 }
 
 function showAllOsmMarkers() {
-    for (const marker of osmMarkers.values()) {
-        marker.getElement().style.display = ''
-    }
+    for (const marker of osmMarkers.values()) marker.getElement().style.display = ''
 }
 
 function cleanupOsmLayer() {
@@ -526,6 +622,7 @@ function cleanupOsmLayer() {
     if (osmFetchController) osmFetchController.abort()
     for (const marker of osmMarkers.values()) marker.remove()
     osmMarkers.clear()
+    osmNodes.clear()
 }
 
 // ─── User location ────────────────────────────────────────────────────────
@@ -538,8 +635,7 @@ function showUserLocation() {
             const el = document.createElement('div')
             el.className = 'user-location-marker'
             userLocationMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
-                .setLngLat([coords.longitude, coords.latitude])
-                .addTo(map)
+                .setLngLat([coords.longitude, coords.latitude]).addTo(map)
         },
         (err) => console.warn('Location error:', err),
         { enableHighAccuracy: true }
@@ -556,7 +652,6 @@ function onMapClick(e) {
     if (map) map.getCanvas().style.cursor = ''
 }
 
-// ─── Controls ─────────────────────────────────────────────────────────────
 function zoomIn() { map?.zoomIn() }
 function zoomOut() { map?.zoomOut() }
 
@@ -570,9 +665,7 @@ function cancelAddPin() {
     if (map) map.getCanvas().style.cursor = ''
 }
 
-async function logout() {
-    await auth.logout()
-}
+async function logout() { await auth.logout() }
 
 defineExpose({ map: () => map })
 </script>
@@ -784,6 +877,85 @@ defineExpose({ map: () => map })
     transform: translateX(-50%) translateY(8px);
 }
 
+/* ── Lightbox ── */
+.lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: rgba(16, 8, 4, 0.92);
+    backdrop-filter: blur(8px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 24px;
+}
+
+.lightbox__close {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 38px;
+    height: 38px;
+    border-radius: 8px;
+    background: rgba(240, 230, 211, 0.1);
+    border: 1px solid rgba(240, 230, 211, 0.2);
+    color: #f0e6d3;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+}
+
+.lightbox__close:hover {
+    background: rgba(240, 230, 211, 0.2);
+}
+
+.lightbox__img-wrap {
+    max-width: min(90vw, 680px);
+    max-height: 70vh;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+}
+
+.lightbox__img-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.lightbox__meta {
+    text-align: center;
+}
+
+.lightbox__name {
+    font-family: 'Playfair Display', serif;
+    font-size: 18px;
+    font-weight: 600;
+    color: #f0e6d3;
+    margin-bottom: 4px;
+}
+
+.lightbox__date {
+    font-size: 12px;
+    color: #c8a97a;
+    font-family: 'DM Mono', monospace;
+}
+
+.lightbox-enter-active,
+.lightbox-leave-active {
+    transition: opacity 0.2s;
+}
+
+.lightbox-enter-from,
+.lightbox-leave-to {
+    opacity: 0;
+}
+
 :deep(.maplibregl-ctrl-attrib) {
     background: rgba(250, 246, 240, 0.85) !important;
     font-size: 10px !important;
@@ -805,9 +977,8 @@ defineExpose({ map: () => map })
 }
 </style>
 
-<!-- Unscoped: MapLibre injects markers outside Vue's component DOM tree -->
 <style>
-/* ── Community pin markers ── */
+/* ── Community diamond pins ── */
 .cafe-pin {
     display: flex;
     flex-direction: column;
@@ -857,14 +1028,13 @@ defineExpose({ map: () => map })
     pointer-events: none;
 }
 
-/* ── OSM café markers ── */
+/* ── OSM teardrop pins ── */
 .osm-pin {
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     filter: drop-shadow(0 1px 3px rgba(44, 26, 14, 0.35));
-    transition: filter 0.15s;
 }
 
 .osm-pin__svg {
@@ -876,22 +1046,7 @@ defineExpose({ map: () => map })
     transform: scale(1.25);
 }
 
-.osm-pin__dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: #3d2512;
-    border: 1.5px solid #c8a97a;
-    opacity: 0.65;
-    transition: opacity 0.15s, transform 0.15s;
-}
-
-.osm-pin:hover .osm-pin__dot {
-    opacity: 1;
-    transform: scale(1.3);
-}
-
-/* ── OSM popup ── */
+/* ── OSM teardrop popup ── */
 .osm-popup-wrapper .maplibregl-popup-content {
     padding: 10px 13px 11px;
     background: #faf6f0;
@@ -934,7 +1089,159 @@ defineExpose({ map: () => map })
     border-top: 1px solid #ede5d8;
 }
 
-/* ── Search result marker ── */
+/* ── Single photo popup ── */
+.snap-popup-wrapper .maplibregl-popup-content {
+    padding: 0;
+    background: #faf6f0;
+    border: 1px solid #ddd0b8;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(44, 26, 14, 0.18);
+    font-family: 'DM Sans', sans-serif;
+}
+
+.snap-popup-wrapper .maplibregl-popup-tip {
+    border-top-color: #ddd0b8;
+}
+
+.snap-popup-wrapper .maplibregl-popup-close-button {
+    color: #7a6550;
+    font-size: 1rem;
+    padding: 4px 8px;
+}
+
+.snap-popup__img-wrap {
+    width: 260px;
+    height: 155px;
+    overflow: hidden;
+    background: #ddd0b8;
+}
+
+.snap-popup__img-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.snap-popup__body {
+    padding: 10px 14px 12px;
+}
+
+.snap-popup__name {
+    font-family: 'Playfair Display', serif;
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a1008;
+    margin-bottom: 4px;
+}
+
+.snap-popup__meta {
+    font-size: 11px;
+    color: #7a6550;
+    margin-bottom: 2px;
+}
+
+.snap-popup__coords {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: #a8854f;
+}
+
+/* ── Gallery popup ── */
+.gallery-popup-wrapper .maplibregl-popup-content {
+    padding: 0;
+    background: #faf6f0;
+    border: 1px solid #ddd0b8;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(44, 26, 14, 0.18);
+    font-family: 'DM Sans', sans-serif;
+}
+
+.gallery-popup-wrapper .maplibregl-popup-tip {
+    border-top-color: #ddd0b8;
+}
+
+.gallery-popup-wrapper .maplibregl-popup-close-button {
+    color: #7a6550;
+    font-size: 1rem;
+    padding: 4px 8px;
+}
+
+.gallery-popup {
+    padding: 12px 14px 14px;
+}
+
+.gallery-popup__name {
+    font-family: 'Playfair Display', serif;
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a1008;
+    margin-bottom: 2px;
+}
+
+.gallery-popup__count {
+    font-size: 11px;
+    color: #7a6550;
+    margin-bottom: 10px;
+}
+
+.gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 3px;
+}
+
+.gallery-grid__item {
+    position: relative;
+    aspect-ratio: 1 / 1;
+    overflow: hidden;
+    cursor: pointer;
+    background: #ddd0b8;
+    border-radius: 3px;
+}
+
+.gallery-grid__item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.2s;
+}
+
+.gallery-grid__item:hover img {
+    transform: scale(1.05);
+}
+
+.gallery-grid__overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(44, 26, 14, 0);
+    display: flex;
+    align-items: flex-end;
+    padding: 5px;
+    transition: background 0.2s;
+}
+
+.gallery-grid__overlay span {
+    font-size: 9px;
+    color: #f0e6d3;
+    line-height: 1.3;
+    opacity: 0;
+    transition: opacity 0.2s;
+    font-family: 'DM Mono', monospace;
+}
+
+.gallery-grid__item:hover .gallery-grid__overlay {
+    background: rgba(44, 26, 14, 0.4);
+}
+
+.gallery-grid__item:hover .gallery-grid__overlay span {
+    opacity: 1;
+}
+
+/* ── Search marker ── */
 .search-marker {
     position: relative;
     display: flex;
@@ -992,65 +1299,6 @@ defineExpose({ map: () => map })
         transform: scale(2.4);
         opacity: 0;
     }
-}
-
-/* ── User pin popup ── */
-.snap-popup-wrapper .maplibregl-popup-content {
-    padding: 0;
-    background: #faf6f0;
-    border: 1px solid #ddd0b8;
-    border-radius: 10px;
-    overflow: hidden;
-    box-shadow: 0 8px 24px rgba(44, 26, 14, 0.18);
-    font-family: 'DM Sans', sans-serif;
-}
-
-.snap-popup-wrapper .maplibregl-popup-tip {
-    border-top-color: #ddd0b8;
-}
-
-.snap-popup-wrapper .maplibregl-popup-close-button {
-    color: #7a6550;
-    font-size: 1rem;
-    padding: 4px 8px;
-}
-
-.snap-popup__img-wrap {
-    width: 260px;
-    height: 155px;
-    overflow: hidden;
-    background: #ddd0b8;
-}
-
-.snap-popup__img-wrap img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-}
-
-.snap-popup__body {
-    padding: 10px 14px 12px;
-}
-
-.snap-popup__name {
-    font-family: 'Playfair Display', serif;
-    font-size: 15px;
-    font-weight: 600;
-    color: #1a1008;
-    margin-bottom: 4px;
-}
-
-.snap-popup__meta {
-    font-size: 11px;
-    color: #7a6550;
-    margin-bottom: 2px;
-}
-
-.snap-popup__coords {
-    font-family: 'DM Mono', monospace;
-    font-size: 10px;
-    color: #a8854f;
 }
 
 /* ── User location marker ── */
