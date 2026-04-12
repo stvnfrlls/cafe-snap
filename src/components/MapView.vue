@@ -133,6 +133,7 @@ const mapContainer = ref(null)
 const isAddingPin = ref(false)
 const showModal = ref(false)
 const selectedCoords = ref(null)
+const claimedPinIds = new Set()
 
 // Lightbox state
 const lightbox = ref({ open: false, src: '', name: '', date: '' })
@@ -203,7 +204,7 @@ function onFlyTo({ lat, lon, displayName }) {
 
 // ─── Brand style overrides ────────────────────────────────────────────────
 function applyBrandStyle() {
-    if (!map) return
+    if (!map || !map.isStyleLoaded()) return
 
     const overrides = [
         { layer: 'background', prop: 'background-color', value: '#f5f0e8' },
@@ -223,7 +224,13 @@ function applyBrandStyle() {
     ]
 
     overrides.forEach(({ layer, prop, value }) => {
-        if (map.getLayer(layer)) map.setPaintProperty(layer, prop, value)
+        if (map.getLayer(layer)) {
+            try {
+                map.setPaintProperty(layer, prop, value)
+            } catch (e) {
+                console.warn(`Could not set style for ${layer}`)
+            }
+        }
     })
 }
 
@@ -336,26 +343,21 @@ function buildGalleryPopupHTML(cafeName, pins) {
 }
 
 function renderPins(pins) {
-    // Remove markers no longer in store
+    if (!map) return
+
     for (const [id, marker] of pinMarkers) {
-        if (!pins.find(p => p.id === id)) {
+        const stillExists = pins.find(p => p.id === id)
+        if (!stillExists || claimedPinIds.has(id)) {
             marker.remove()
             pinMarkers.delete(id)
         }
     }
+
     for (const pin of pins) {
-        if (pinMarkers.has(pin.id)) continue
+        if (pinMarkers.has(pin.id) || claimedPinIds.has(pin.id)) continue
 
-        // Check if this pin is near an OSM café — if so, upgrade that OSM marker instead
-        const osmId = matchingOsmNode(pin.lat, pin.lng)
-        if (osmId) {
-            upgradeOsmMarker(osmId)
-            // Don't add a standalone pin marker — the OSM marker now represents it
-            continue
-        }
-
-        // Standalone user pin
         const el = buildPinElement(pin.cafe_name)
+
         const popup = new maplibregl.Popup({
             offset: 24, closeButton: true, maxWidth: '260px', className: 'snap-popup-wrapper',
         }).setHTML(buildSinglePopupHTML(pin))
@@ -500,9 +502,12 @@ async function fetchOsmCafes() {
 }
 
 function renderOsmCafes(nodes) {
+    if (!map) return
+
     const incomingIds = new Set(nodes.map(n => String(n.id)))
 
-    // Remove markers that left the viewport
+    claimedPinIds.clear()
+
     for (const [id, marker] of osmMarkers) {
         if (!incomingIds.has(id)) {
             marker.remove()
@@ -515,18 +520,27 @@ function renderOsmCafes(nodes) {
         const id = String(node.id)
         osmNodes.set(id, node)
 
-        if (osmMarkers.has(id)) continue
+        const matchedPins = matchingUserPins(node.lat, node.lon)
 
-        const matched = matchingUserPins(node.lat, node.lon)
+        if (matchedPins.length > 0) {
+            matchedPins.forEach(p => claimedPinIds.add(p.id))
 
-        if (matched.length > 0) {
-            // Has user photos — render as diamond with gallery
-            addOsmAsDiamond(id, node, matched)
+            if (!osmMarkers.has(id)) {
+                addOsmAsDiamond(id, node, matchedPins)
+            } else {
+                const marker = osmMarkers.get(id)
+                if (marker.getElement().classList.contains('osm-pin')) {
+                    upgradeOsmMarker(id)
+                }
+            }
         } else {
-            // No user photos — render as teardrop
-            addOsmAsTeardrop(id, node)
+            if (!osmMarkers.has(id)) {
+                addOsmAsTeardrop(id, node)
+            }
         }
     }
+
+    renderPins(pinsStore.pins)
 }
 
 function addOsmAsTeardrop(id, node) {
