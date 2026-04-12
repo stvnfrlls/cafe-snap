@@ -297,7 +297,7 @@ function buildSinglePopupHTML(pin) {
     return `
         <div class="snap-popup">
             <div class="snap-popup__img-wrap"
-                onclick="window.__cafeSnapLightbox('${pin.image_url}','${pin.cafe_name.replace(/'/g, "\\'")}','${dateStr}')"
+                onclick='window.__cafeSnapLightbox(${JSON.stringify(String(pin.image_url))}, ${JSON.stringify(String(pin.cafe_name))}, ${JSON.stringify(String(dateStr))})'
                 style="cursor:pointer">
                 <img src="${pin.image_url}" alt="${pin.cafe_name}" loading="lazy" />
             </div>
