@@ -48,13 +48,6 @@ export const usePinsStore = defineStore('pins', () => {
             .single()
         if (insertErr) throw insertErr
 
-        console.log('Uploading file...', filePath)
-
-        if (uploadErr) {
-            console.error(uploadErr)
-            throw uploadErr
-        }
-
         pins.value.unshift(data)
         return data
     }

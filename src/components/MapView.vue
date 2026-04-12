@@ -24,14 +24,19 @@
             </a>
 
             <div class="map-nav-actions">
-                <button class="btn-add" @click="onAddPinClick" :disabled="!isLoggedIn">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-                        stroke-linecap="round">
-                        <path d="M12 5v14M5 12h14" />
-                    </svg>
+                <button v-if="isLoggedIn" class="btn-add" @click="onAddPinClick">
                     Add pin
                 </button>
-                <button class="btn-user">
+                <button v-if="isLoggedIn" class="btn-user" @click="logout" title="Logout">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round">
+                        <path d="M16 17l5-5-5-5" />
+                        <path d="M21 12H9" />
+                        <path d="M12 19v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
+                </button>
+
+                <button v-else class="btn-user" @click="$router.push('/auth')" title="Login">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round">
                         <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -66,7 +71,7 @@
         </div>
 
         <!-- Locate me button -->
-        <button class="map-locate-btn" @click="locateUser" title="Go to my location">
+        <button class="map-locate-btn" @click="showUserLocation" title="Go to my location">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round">
                 <circle cx="12" cy="12" r="3" />
@@ -115,6 +120,7 @@ const mapContainer = ref(null)
 const isAddingPin = ref(false)
 const showModal = ref(false)
 const selectedCoords = ref(null)
+let userLocationMarker = null
 
 let map = null
 
@@ -345,10 +351,56 @@ function applyScaleToMarker(marker) {
     }
 }
 
+function showUserLocation() {
+    if (!navigator.geolocation || !map) return
+
+    navigator.geolocation.getCurrentPosition(
+        ({ coords }) => {
+            const lng = coords.longitude
+            const lat = coords.latitude
+
+            // fly to user
+            map.flyTo({
+                center: [lng, lat],
+                zoom: 15,
+                duration: 1200
+            })
+
+            // remove old marker
+            if (userLocationMarker) {
+                userLocationMarker.remove()
+            }
+
+            // create element
+            const el = document.createElement('div')
+            el.className = 'user-location-marker'
+
+            // add marker
+            userLocationMarker = new maplibregl.Marker({
+                element: el,
+                anchor: 'center'
+            })
+                .setLngLat([lng, lat])
+                .addTo(map)
+        },
+        (err) => console.warn('Location error:', err),
+        {
+            enableHighAccuracy: true
+        }
+    )
+}
+
 // Re-render whenever pins change (e.g. after AddPinModal inserts a new one in Step 4)
-watch(() => pinsStore.pins, (newPins) => {
-    if (map) renderPins(newPins)
-}, { deep: true })
+watch(
+    () => pinsStore.pins,
+    (pins) => {
+        if (!map) return
+        if (!pins || pins.length === 0) return
+
+        renderPins(pins)
+    },
+    { deep: true, immediate: true }
+)
 
 // ─── Map interactions ─────────────────────────────────────────────────────
 function onMapClick(e) {
@@ -391,6 +443,10 @@ function onAddPinClick() {
 function cancelAddPin() {
     isAddingPin.value = false
     if (map) map.getCanvas().style.cursor = ''
+}
+
+async function logout() {
+    await auth.logout()
 }
 
 defineExpose({ map: () => map })
@@ -795,5 +851,37 @@ defineExpose({ map: () => map })
     font-family: 'DM Mono', monospace;
     font-size: 10px;
     color: #a8854f;
+}
+
+.user-location-marker {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #4da3ff;
+    border: 2px solid white;
+    box-shadow: 0 0 0 0 rgba(77, 163, 255, 0.6);
+    animation: pulse 1.5s infinite;
+}
+
+.user-location-marker::after {
+    content: "";
+    position: absolute;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(77, 163, 255, 0.2);
+    transform: translate(-50%, -50%);
+    top: 50%;
+    left: 50%;
+}
+
+@keyframes pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(77, 163, 255, 0.5);
+    }
+
+    100% {
+        box-shadow: 0 0 0 12px rgba(77, 163, 255, 0);
+    }
 }
 </style>

@@ -1,4 +1,4 @@
-import { createRouter, createWebHashHistory } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 import LandingPage from '@/components/LandingPage.vue'
@@ -19,12 +19,12 @@ const routes = [
     {
         path: '/map',
         component: MapView,
-        meta: { requiresAuth: true }, // must be logged in
+        meta: { requiresAuth: false },
     },
 ]
 
 const router = createRouter({
-    history: createWebHashHistory(), // hash mode → no server config needed
+    history: createWebHistory(),
     routes,
 })
 
@@ -32,16 +32,24 @@ const router = createRouter({
 router.beforeEach(async (to) => {
     const auth = useAuthStore()
 
-    // Wait for Supabase session to be resolved on first load
-    if (!auth.resolved) await auth.init()
-
-    if (to.meta.requiresAuth && !auth.user) {
-        return { path: '/auth' }
+    // wait until Supabase session is resolved
+    if (!auth.resolved) {
+        await auth.init()
     }
 
-    if (to.meta.guestOnly && auth.user) {
-        return { path: '/map' }
+    const requiresAuth = to.meta.requiresAuth
+
+    // block protected routes
+    if (requiresAuth && !auth.user) {
+        return '/auth'
     }
+
+    // prevent logged-in users from seeing login page
+    if (to.path === '/auth' && auth.user) {
+        return '/map'
+    }
+
+    return true
 })
 
 export default router
