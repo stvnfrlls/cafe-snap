@@ -53,12 +53,11 @@ export const usePinsStore = defineStore('pins', () => {
     }
 
     async function deletePin(id) {
-        const { error: err } = await supabase
-            .from('pins')
-            .delete()
-            .eq('id', id)
-        if (err) throw err
-        pins.value = pins.value.filter(p => p.id !== id)
+        const { error } = await supabase.from('pins').delete().eq('id', id)
+        if (!error) {
+            pins.value = pins.value.filter(p => p.id !== id)
+        }
+        return { error }
     }
 
     return { pins, loading, error, fetchPins, addPin, deletePin }

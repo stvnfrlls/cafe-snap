@@ -252,15 +252,6 @@ function matchingUserPins(lat, lon) {
     return pinsStore.pins.filter(p => haversineMeters(lat, lon, p.lat, p.lng) <= MATCH_THRESHOLD)
 }
 
-// Find OSM node id within threshold of a user pin coordinate (returns id string or null)
-function matchingOsmNode(lat, lon) {
-    for (const [id, marker] of osmMarkers) {
-        const ll = marker.getLngLat()
-        if (haversineMeters(lat, lon, ll.lat, ll.lng) <= MATCH_THRESHOLD) return id
-    }
-    return null
-}
-
 // ─── Lightbox ────────────────────────────────────────────────────────────
 function openLightbox(src, name, date) {
     lightbox.value = { open: true, src, name, date }
@@ -272,6 +263,32 @@ function closeLightbox() {
 
 // Expose to inline popup onclick handlers
 window.__cafeSnapLightbox = openLightbox
+window.__cafeSnapDeletePin = async (id, btnEl) => {
+    if (btnEl) {
+        btnEl.disabled = true
+        btnEl.textContent = 'Deleting…'
+        btnEl.style.opacity = '0.6'
+        btnEl.style.cursor = 'not-allowed'
+    }
+
+    closeAllPopups()  // ← move here, before the await
+
+    const result = await pinsStore.deletePin(id)
+    const error = result?.error
+
+    if (error) {
+        if (btnEl) {
+            btnEl.disabled = false
+            btnEl.textContent = 'Delete pin'
+            btnEl.style.opacity = '1'
+            btnEl.style.cursor = 'pointer'
+        }
+        console.error('Delete failed:', error)
+        return
+    }
+
+    refreshOsmRender()
+}
 
 // ─── Community pin markers ────────────────────────────────────────────────
 const pinMarkers = new Map()
@@ -301,6 +318,7 @@ function buildSinglePopupHTML(pin) {
     const dateStr = new Date(pin.created_at).toLocaleDateString('en-PH', {
         month: 'long', day: 'numeric', year: 'numeric'
     })
+    const isOwner = auth.user?.id === pin.user_id
     return `
         <div class="snap-popup">
             <div class="snap-popup__img-wrap"
@@ -312,6 +330,11 @@ function buildSinglePopupHTML(pin) {
                 <p class="snap-popup__name">${pin.cafe_name}</p>
                 <p class="snap-popup__meta">${date}</p>
                 <p class="snap-popup__coords">${pin.lat.toFixed(5)}, ${pin.lng.toFixed(5)}</p>
+               ${isOwner ? `<button class="snap-popup__delete"
+                onclick='window.__cafeSnapDeletePin(${JSON.stringify(pin.id)}, this)'
+                style="margin-top:8px;padding:4px 10px;background:transparent;border:1px solid #ddd0b8;border-radius:4px;color:#7a6550;font-family:'DM Sans',sans-serif;font-size:11px;cursor:pointer;width:100%;transition:background 0.15s,border-color 0.15s,color 0.15s;"
+                onmouseover="this.style.background='#2c1a0e';this.style.borderColor='#2c1a0e';this.style.color='#f0e6d3';"
+                onmouseout="this.style.background='transparent';this.style.borderColor='#ddd0b8';this.style.color='#7a6550';">Delete pin</button>` : ''}
             </div>
         </div>
     `
@@ -322,6 +345,7 @@ function buildGalleryPopupHTML(cafeName, pins) {
         const dateStr = new Date(p.created_at).toLocaleDateString('en-PH', {
             month: 'long', day: 'numeric', year: 'numeric'
         })
+        const isOwner = auth.user?.id === p.user_id
         return `
             <div class="gallery-grid__item"
                 onclick='window.__cafeSnapLightbox(${JSON.stringify(String(p.image_url))}, ${JSON.stringify(String(cafeName))}, ${JSON.stringify(String(dateStr))})'>
@@ -329,6 +353,11 @@ function buildGalleryPopupHTML(cafeName, pins) {
                 <div class="gallery-grid__overlay">
                     <span>${dateStr}</span>
                 </div>
+                ${isOwner ? `
+                <button class="gallery-grid__delete"
+                    onclick='event.stopPropagation(); window.__cafeSnapDeletePin(${JSON.stringify(p.id)}, this)'
+                    style="position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(44,26,14,0.75);border:1px solid rgba(200,169,122,0.5);color:#f0e6d3;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;">✕</button>
+                ` : ''}
             </div>
         `
     }).join('')
@@ -345,22 +374,45 @@ function buildGalleryPopupHTML(cafeName, pins) {
 function renderPins(pins) {
     if (!map) return
 
-    for (const [id, marker] of pinMarkers) {
-        const stillExists = pins.find(p => p.id === id)
-        if (!stillExists || claimedPinIds.has(id)) {
-            marker.remove()
-            pinMarkers.delete(id)
-        }
+    const existingIds = [...pinMarkers.keys()]
+    for (const id of existingIds) {
+        const marker = pinMarkers.get(id)
+        marker.getPopup()?.remove()
+        marker.remove()
+        pinMarkers.delete(id)
     }
 
-    for (const pin of pins) {
-        if (pinMarkers.has(pin.id) || claimedPinIds.has(pin.id)) continue
+    const rendered = new Set()
 
-        const el = buildPinElement(pin.cafe_name)
+    for (const pin of pins) {
+        if (claimedPinIds.has(pin.id)) continue
+        if (rendered.has(pin.id)) continue
+
+        const cluster = pins.filter(p =>
+            !claimedPinIds.has(p.id) &&
+            !rendered.has(p.id) &&
+            haversineMeters(pin.lat, pin.lng, p.lat, p.lng) <= MATCH_THRESHOLD
+        )
+
+        cluster.forEach(p => rendered.add(p.id))
+
+        const name = pin.cafe_name
+        const el = buildPinElement(name)
+
+        const popupHTML = cluster.length === 1
+            ? buildSinglePopupHTML(cluster[0])
+            : buildGalleryPopupHTML(name, cluster)
+
+        const popupClass = cluster.length === 1
+            ? 'snap-popup-wrapper'
+            : 'gallery-popup-wrapper'
 
         const popup = new maplibregl.Popup({
-            offset: 24, closeButton: true, maxWidth: '260px', className: 'snap-popup-wrapper',
-        }).setHTML(buildSinglePopupHTML(pin))
+            offset: 24,
+            closeButton: true,
+            maxWidth: cluster.length === 1 ? '260px' : '280px',
+            className: popupClass,
+        }).setHTML(popupHTML)
 
         const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
             .setLngLat([pin.lng, pin.lat])
@@ -371,14 +423,25 @@ function renderPins(pins) {
     }
 }
 
+function closeAllPopups() {
+    for (const marker of pinMarkers.values()) marker.getPopup()?.remove()
+    for (const marker of osmMarkers.values()) marker.getPopup()?.remove()
+}
+
 function onPinCreated(pin) {
+    refreshOsmRender()
     map?.flyTo({ center: [pin.lng, pin.lat], zoom: 15, duration: 1000 })
 }
 
 watch(
+    () => pinsStore.pins.length,
+    () => { if (map) refreshOsmRender() }
+)
+
+watch(
     () => pinsStore.pins,
-    (pins) => { if (map && pins?.length) renderPins(pins) },
-    { deep: true, immediate: true }
+    () => { if (map) refreshOsmRender() },
+    { deep: true }
 )
 
 // ─── OSM Café Layer ───────────────────────────────────────────────────────
@@ -432,6 +495,19 @@ function getViewportTileKeys() {
         }
     }
     return keys
+}
+
+function refreshOsmRender() {
+    if (!map) return
+    const viewportKeys = getViewportTileKeys()
+    const cachedNodes = [...viewportKeys]
+        .filter(k => osmCache.has(k))
+        .flatMap(k => osmCache.get(k))
+    if (cachedNodes.length > 0) {
+        renderOsmCafes(cachedNodes)
+    } else {
+        renderPins(pinsStore.pins)
+    }
 }
 
 async function fetchOsmCafes() {
@@ -508,8 +584,9 @@ function renderOsmCafes(nodes) {
 
     claimedPinIds.clear()
 
-    for (const [id, marker] of osmMarkers) {
+    for (const [id, marker] of [...osmMarkers.entries()]) {
         if (!incomingIds.has(id)) {
+            marker.getPopup()?.remove()
             marker.remove()
             osmMarkers.delete(id)
             osmNodes.delete(id)
@@ -521,20 +598,26 @@ function renderOsmCafes(nodes) {
         osmNodes.set(id, node)
 
         const matchedPins = matchingUserPins(node.lat, node.lon)
+        const existing = osmMarkers.get(id)
 
         if (matchedPins.length > 0) {
             matchedPins.forEach(p => claimedPinIds.add(p.id))
 
-            if (!osmMarkers.has(id)) {
-                addOsmAsDiamond(id, node, matchedPins)
-            } else {
-                const marker = osmMarkers.get(id)
-                if (marker.getElement().classList.contains('osm-pin')) {
-                    upgradeOsmMarker(id)
-                }
+            // Always rebuild diamond so popup reflects latest pins
+            if (existing) {
+                existing.getPopup()?.remove()
+                existing.remove()
+                osmMarkers.delete(id)
             }
+            addOsmAsDiamond(id, node, matchedPins)
+
         } else {
-            if (!osmMarkers.has(id)) {
+            if (!existing) {
+                addOsmAsTeardrop(id, node)
+            } else if (!existing.getElement().classList.contains('osm-pin')) {
+                existing.getPopup()?.remove()
+                existing.remove()
+                osmMarkers.delete(id)
                 addOsmAsTeardrop(id, node)
             }
         }
@@ -987,6 +1070,26 @@ defineExpose({ map: () => map })
     z-index: 10;
     width: 420px;
     max-width: calc(100vw - 32px);
+}
+
+.snap-popup__delete {
+    margin-top: 8px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid #ddd0b8;
+    border-radius: 4px;
+    color: #7a6550;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    width: 100%;
+}
+
+.snap-popup__delete:hover {
+    background: #2c1a0e;
+    border-color: #2c1a0e;
+    color: #f0e6d3;
 }
 </style>
 
