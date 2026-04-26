@@ -538,8 +538,11 @@ async function fetchOsmCafes() {
     const query = `[out:json][timeout:15];node["amenity"="cafe"](${s},${w},${n},${e});out body;`
 
     try {
-        const res = await fetch('https://overpass-api.de/api/interpreter', {
-            method: 'POST', body: query, signal: osmFetchController.signal,
+        const res = await fetch('https://overpass.private.coffee/api/interpreter', {
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: query, 
+            signal: osmFetchController.signal,
         })
 
         if (res.status === 429) {
