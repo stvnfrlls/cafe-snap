@@ -158,6 +158,7 @@ onMounted(() => {
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left')
     map.scrollZoom.enable()
     map.on('load', onMapLoad)
+    map.on('load', showUserLocation)
     map.on('click', onMapClick)
 })
 
@@ -690,16 +691,24 @@ function upgradeOsmMarker(osmId) {
 function buildOsmPopupHTML(node) {
     const tags = node.tags ?? {}
     const name = tags.name ?? 'Unknown café'
-    const street = tags['addr:street'] ?? ''
     const housenr = tags['addr:housenumber'] ?? ''
+    const street = tags['addr:street'] ?? ''
     const address = [housenr, street].filter(Boolean).join(' ')
     const hours = tags['opening_hours'] ?? ''
+    const phone = tags['phone'] ?? tags['contact:phone'] ?? ''
+    const website = tags['website'] ?? tags['contact:website'] ?? ''
+    const cuisine = tags['cuisine'] ?? ''
+    const wifi = tags['internet_access'] === 'wlan' ? 'Wi-Fi available' : ''
 
     return `
         <div class="osm-popup">
             <p class="osm-popup__name">${name}</p>
+            ${cuisine ? `<p class="osm-popup__detail osm-popup__cuisine">${cuisine.replace(/;/g, ', ')}</p>` : ''}
             ${address ? `<p class="osm-popup__detail">${address}</p>` : ''}
             ${hours ? `<p class="osm-popup__hours">${hours}</p>` : ''}
+            ${phone ? `<p class="osm-popup__detail"><a href="tel:${phone}" style="color:#a8854f;text-decoration:none;">${phone}</a></p>` : ''}
+            ${wifi ? `<p class="osm-popup__detail" style="color:#7a9a6a;font-size:10px;">📶 ${wifi}</p>` : ''}
+            ${website ? `<p class="osm-popup__detail"><a href="${website}" target="_blank" rel="noopener" style="color:#a8854f;font-size:10px;text-decoration:none;">🔗 Website</a></p>` : ''}
             <p class="osm-popup__source">via OpenStreetMap</p>
         </div>
     `
